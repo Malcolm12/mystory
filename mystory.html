@@ -1,0 +1,376 @@
+<!doctype><html><head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>Odyssey.js Slides</title>
+  <meta name="description" content="">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <link rel="icon" type="image/x-icon" href="http://cartodb.github.io/odyssey.js/sandbox/favicon.png">
+  <link rel="icon" type="image/png" href="http://cartodb.github.io/odyssey.js/sandbox/favicon.png">
+
+  <link rel="stylesheet" href="http://cartodb-libs.global.ssl.fastly.net/cartodb.js/v3/themes/css/cartodb.css">
+  <link rel="stylesheet" href="http://cartodb.github.io/odyssey.js/sandbox/css/slides.css">
+  <script src="http://cartodb.github.io/odyssey.js/vendor/modernizr-2.6.2.min.js"></script>
+</head>
+<body>
+  <div id="map" style="width: 100%; height: 100%;"></div>
+
+  <div id="slides_container" style="display:block;">
+    <div id="dots"></div>
+
+    <div id="slides"></div>
+
+    <ul id="navButtons">
+      <li><a class="prev"></a></li>
+      <li><a class="next"></a></li>
+    </ul>
+  </div>
+
+  <div id="credits">
+    <span class="title" id="title">Title</span>
+    <span class="author"><strong id="author">By Name using</strong> <a href="http://cartodb.github.io/odyssey.js/">Odyssey.js</a><span>
+  </span></span></div>
+
+  <script src="http://cartodb-libs.global.ssl.fastly.net/cartodb.js/v3/cartodb.js"></script>
+  <script src="http://cartodb.github.io/odyssey.js/dist/odyssey.js" charset="UTF-8"></script>
+
+  <script>
+    var resizePID;
+
+    function clearResize() {
+      clearTimeout(resizePID);
+      resizePID = setTimeout(function() { adjustSlides(); }, 100);
+    }
+
+    if (!window.addEventListener) {
+      window.attachEvent("resize", function load(event) {
+        clearResize();
+      });
+    } else {
+      window.addEventListener("resize", function load(event) {
+        clearResize();
+      });
+    }
+
+    function adjustSlides() {
+      var container = document.getElementById("slides_container"),
+          slide = document.querySelectorAll('.selected_slide')[0];
+
+      if (slide) {
+        if (slide.offsetHeight+169+40+80 >= window.innerHeight) {
+          container.style.bottom = "80px";
+
+          var h = container.offsetHeight;
+
+          slide.style.height = h-169+"px";
+          slide.classList.add("scrolled");
+        } else {
+          container.style.bottom = "auto";
+          container.style.minHeight = "0";
+
+          slide.style.height = "auto";
+          slide.classList.remove("scrolled");
+        }
+      }
+    }
+
+    var resizeAction = O.Action(function() {
+      function imageLoaded() {
+        counter--;
+
+        if (counter === 0) {
+          adjustSlides();
+        }
+      }
+      var images = $('img');
+      var counter = images.length;
+
+      images.each(function() {
+        if (this.complete) {
+          imageLoaded.call( this );
+        } else {
+          $(this).one('load', imageLoaded);
+        }
+      });
+    });
+
+    function click(el) {
+      var element = O.Core.getElement(el);
+      var t = O.Trigger();
+
+      // TODO: clean properly
+      function click() {
+        t.trigger();
+      }
+
+      if (element) element.onclick = click;
+
+      return t;
+    }
+
+    O.Template({
+      init: function() {
+        var seq = O.Triggers.Sequential();
+
+        var baseurl = this.baseurl = 'http://{s}.api.cartocdn.com/base-light/{z}/{x}/{y}.png';
+        var map = this.map = L.map('map').setView([0, 0.0], 4);
+        var basemap = this.basemap = L.tileLayer(baseurl, {
+          attribution: 'data OSM - map CartoDB'
+        }).addTo(map);
+
+        // enanle keys to move
+        O.Keys().on('map').left().then(seq.prev, seq)
+        O.Keys().on('map').right().then(seq.next, seq)
+
+        click(document.querySelectorAll('.next')).then(seq.next, seq)
+        click(document.querySelectorAll('.prev')).then(seq.prev, seq)
+
+        var slides = O.Actions.Slides('slides');
+        var story = O.Story()
+
+        this.story = story;
+        this.seq = seq;
+        this.slides = slides;
+        this.progress = O.UI.DotProgress('dots').count(0);
+      },
+
+      update: function(actions) {
+        var self = this;
+
+        if (!actions.length) return;
+
+        this.story.clear();
+
+        if (this.baseurl && (this.baseurl !== actions.global.baseurl)) {
+          this.baseurl = actions.global.baseurl || 'http://0.api.cartocdn.com/base-light/{z}/{x}/{y}.png';
+
+          this.basemap.setUrl(this.baseurl);
+        }
+
+        if (this.cartoDBLayer && ("http://"+self.cartoDBLayer.options.user_name+".cartodb.com/api/v2/viz/"+self.cartoDBLayer.options.layer_definition.stat_tag+"/viz.json" !== actions.global.vizjson)) {
+          this.map.removeLayer(this.cartoDBLayer);
+
+          this.cartoDBLayer = null;
+          this.created = false;
+        }
+
+        if (actions.global.vizjson && !this.cartoDBLayer) {
+          if (!this.created) { // sendCode debounce < vis loader
+            cdb.vis.Loader.get(actions.global.vizjson, function(vizjson) {
+              self.map.fitBounds(vizjson.bounds);
+
+              cartodb.createLayer(self.map, vizjson)
+                .done(function(layer) {
+                  self.cartoDBLayer = layer;
+
+                  var sublayer = layer.getSubLayer(0),
+                      layer_name = layer.layers[0].options.layer_name,
+                      filter = actions.global.cartodb_filter ? " WHERE "+actions.global.cartodb_filter : "";
+
+                  sublayer.setSQL("SELECT * FROM "+layer_name+filter)
+
+                  self.map.addLayer(layer);
+
+                  self._resetActions(actions);
+                }).on('error', function(err) {
+                  console.log("some error occurred: " + err);
+                });
+            });
+
+            this.created = true;
+          }
+
+          return;
+        }
+
+        this._resetActions(actions);
+      },
+
+      _resetActions: function(actions) {
+        // update footer title and author
+        var title_ = actions.global.title === undefined ? '' : actions.global.title,
+            author_ = actions.global.author === undefined ? 'Using' : 'By '+actions.global.author+' using';
+
+        document.getElementById('title').innerHTML = title_;
+        document.getElementById('author').innerHTML = author_;
+        document.title = title_ + " | " + author_ +' Odyssey.js';
+
+        var sl = actions;
+
+        document.getElementById('slides').innerHTML = ''
+        this.progress.count(sl.length);
+
+        // create new story
+        for(var i = 0; i < sl.length; ++i) {
+          var slide = sl[i];
+          var tmpl = "<div class='slide' style='diplay:none'>";
+
+          tmpl += slide.html();
+          tmpl += "</div>";
+          document.getElementById('slides').innerHTML += tmpl;
+
+          this.progress.step(i).then(this.seq.step(i), this.seq)
+
+          var actions = O.Parallel(
+            this.slides.activate(i),
+            slide(this),
+            this.progress.activate(i),
+            resizeAction
+          );
+
+          actions.on("finish.app", function() {
+            adjustSlides();
+          });
+
+          this.story.addState(
+            this.seq.step(i),
+            actions
+          )
+        }
+
+        this.story.go(this.seq.current());
+      },
+
+      changeSlide: function(n) {
+        this.seq.current(n);
+      }
+    });
+  </script>
+
+  <script>
+    (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+    (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+    m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+    })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+    ga('create', 'UA-20934186-21', 'cartodb.github.io');
+    ga('send', 'pageview');
+  </script>
+
+  <script type="text/javascript" src="http://fast.fonts.net/jsapi/3af16084-ba56-49ca-b37d-0b49b59e1927.js"></script>
+
+<script id="md_template" type="text/template">```
+-baseurl: "https://2.maps.nlp.nokia.com/maptile/2.1/maptile/newest/normal.day/{z}/{x}/{y}/256/png8?lg=eng&token=A7tBPacePg9Mj_zghvKt9Q&app_id=KuYppsdXZznpffJsKT24"
+"http://maps.stamen.com/toner/#{z}/{x}/{y}"
+-title: "Odyssey example FTW"
+-author: "CartoDB"
+-vizjson: "http://malcolm.cartodb.com/api/v2/viz/ebe63730-799d-11e4-8c4f-0e018d66dc29/viz.json"
+```
+
+#This is the Story of me!
+```
+- center: [40.9467, -89.0332]
+- zoom: 5
+```
+Let me share my Journey with you!
+![Malcolm picture](https://media.licdn.com/media/p/3/005/099/315/3973693.jpg)
+
+
+#I was born in Iowa City, Iowa
+```
+L.marker([40.7348, -73.9970]).actions.addRemove(S.map)
+- center: [41.6603, -91.5520]
+- zoom: 13
+L.marker([41.6644, -91.5278]).actions.addRemove(S.map)
+```
+![Iowa City](https://fbcdn-sphotos-h-a.akamaihd.net/hphotos-ak-xpa1/v/t1.0-9/s720x720/15390_10152429490873778_5505453739461914860_n.jpg?oh=e5a5747c7066dae1cf7242fb55be4ce3&oe=550D4674&__gda__=1426449315_ec08bb244bf9b190f27bd63faf902807)
+Mother: Angela Trimnell
+/Step-Father: Klaus Ehrlich
+![Mother](https://scontent-b.xx.fbcdn.net/hphotos-frc3/v/t1.0-9/167210_1802106142605_1359706_n.jpg?oh=ea08bcaea07682f979fe6d550b0d8e47&oe=55156EB8)
+
+Father: Marshall Garrison and
+recently married to Rebecca Brouillet
+![Father](https://fbcdn-sphotos-b-a.akamaihd.net/hphotos-ak-xap1/v/t1.0-9/10805689_10205126045771200_8454433073010472498_n.jpg?oh=c72f2284a873a2bbed2a500a2add3121&oe=551C5323&__gda__=1426630262_7a80b01ee5b5a2ec58a3b0484e31676f)
+
+
+#and grew up in Des Moines!
+```
+L.marker([41.6130, -93.6063]).actions.addRemove(S.map)
+- center: [41.6031, -93.6143]
+- zoom: 14
+```
+
+![New York](https://fbcdn-sphotos-g-a.akamaihd.net/hphotos-ak-xaf1/v/t1.0-9/40491_1271766994259_4147179_n.jpg?oh=c0243ee3ec8da4c63d5d8fe16d5a73f9&oe=54D56896&__gda__=1427766888_5631878f29591c153f2ee5515765e321)
+
+#...until I moved to San Francisco Bay Area
+```
+L.marker([41.5981, -93.6194]).actions.addRemove(S.map)
+- center: [37.7672, -122.4821]
+- zoom: 12
+```
+![Family in San Ramon](https://scontent-a.xx.fbcdn.net/hphotos-xfa1/v/t1.0-9/10577057_656574284439372_5785078944107071716_n.jpg?oh=ad0bdca01b6023d34b13943ab062fcd0&oe=550913E3)
+
+#in the beautiful San Ramon Valley
+```
+L.marker([37.7554, -121.9461]).actions.addRemove(S.map)
+- center: [37.7715, -121.9668]
+- zoom: 13
+```
+California High School Go Grzzlies!
+
+![Family in San Ramon](http://ww1.prweb.com/prfiles/2010/03/04/1561394/BridgesGolfCLubSanRamon.jpg)
+#But then I went to Music School on the east Coast
+```
+L.marker([42.3410, -71.0856]).actions.addRemove(S.map)
+- center: [42.3588, -71.0937]
+- zoom: 13
+```
+New England Conservatory of Music
+![Bonn Jazz](https://fbcdn-sphotos-a-a.akamaihd.net/hphotos-ak-xfp1/v/t1.0-9/156603_10150097387423829_6468382_n.jpg?oh=99cab306e2ba1ce21fb5392c6e527b82&oe=5501B111&__gda__=1427015171_0f7e2c56ed33ec24a958ba1f1627541b)
+
+#After Music School I went to Germany and worked as a Jazz Singer
+```
+L.marker([50.6844, 7.0692]).actions.addRemove(S.map)
+- center: [50.7125, 7.0501]
+- zoom: 12
+```
+![Bonn Jazz](https://fbcdn-sphotos-h-a.akamaihd.net/hphotos-ak-xfa1/v/t1.0-9/427622_273427326062964_558021382_n.jpg?oh=0a1baef09eb283f279b9dfa8cb78e3f6&oe=551530DC&__gda__=1427698786_935e5059a930bffed668e1261eeacdb2)
+My Buddies:
+![My Buddies](https://fbcdn-sphotos-c-a.akamaihd.net/hphotos-ak-xaf1/v/t1.0-9/262423_10150272782373778_6954654_n.jpg?oh=f8696508273f8e284fb59b715a448e01&oe=54D2F74B&__gda__=1426308250_954e486ee9e83b51b7ba545d6284f3ce)
+![My Buddies](https://scontent-b.xx.fbcdn.net/hphotos-xfa1/v/t1.0-9/265005_10150236364763778_1897395_n.jpg?oh=e60a9a463f90fbe3791acc86711c85f3&oe=550AFEF1)
+
+
+
+#After that I prepared for a big change!
+```
+- center: [37.8965, -122.0966]
+- zoom: 8
+```
+
+#...and decided to take the big leap and Move to the Big Apple
+
+
+```
+- center: [40.7642, -74.0032]
+- zoom: 12
+```
+![New York](https://scontent-b.xx.fbcdn.net/hphotos-xfp1/v/t1.0-9/10404866_10152657386073778_7776399332733877201_n.jpg?oh=3f6feecc89037aa87f0296267712067f&oe=551CD7C3)
+![New York](https://scontent-b.xx.fbcdn.net/hphotos-xap1/v/t1.0-9/10805843_10152669568303778_4612402803107368359_n.jpg?oh=81f6bc62da21935b4f0677104add3f6d&oe=551B2C39)
+
+#Where I currently reside in Brooklyn
+```
+L.marker([40.6729, -73.9405]).actions.addRemove(S.map)
+- center: [40.6719, -73.9428]
+- zoom: 15
+```
+New Home:
+![Brooklyn](https://fbcdn-sphotos-a-a.akamaihd.net/hphotos-ak-xpa1/v/t1.0-9/10659271_603050909798739_2466841979834056781_n.jpg?oh=37597f7cc3ace49f970f118a3c12faf8&oe=55170D92&__gda__=1426394154_d63e745925c5578d1d8a22885dfe4bf9)
+``
+My Roomates:
+![Brooklyn](https://fbcdn-sphotos-b-a.akamaihd.net/hphotos-ak-xpf1/v/t1.0-9/10422556_10152669610658778_2701978243191372300_n.jpg?oh=8c1724e610da2137a2a55987bb39ef88&oe=551562F9&__gda__=1426770054_77c687be6ec082ae4b12531a40991115)
+
+
+
+
+
+
+
+#One day I hope to travel the world
+to be continued.....
+```
+- center: [40.4469, -28.5645]
+- zoom: 3
+```
+
+
+</script></body></html>
